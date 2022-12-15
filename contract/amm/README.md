@@ -1,4 +1,4 @@
-# Hello NEAR Contract
+# AMM Contract
 
 The smart contract exposes two methods to enable storing and retrieving a greeting in the NEAR network.
 
