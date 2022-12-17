@@ -8,4 +8,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 near-sdk = "4.1.1"
-uint = { version = "0.9.5", default-features = false }
+near-contract-standards = "4.1.1"

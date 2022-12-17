@@ -1,0 +1,55 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  rust_ci:
+    name: Rust CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@0.11.0
+
+      - uses: actions/checkout@v3
+
+      - name: Toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          target: wasm32-unknown-unknown
+          profile: minimal
+          components: rustfmt,clippy
+          override: true
+      
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Check
+        uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --release
+      
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+      
+      - name: Format
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+      - name: Clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all -- -D warnings
