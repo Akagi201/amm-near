@@ -1,5 +1,5 @@
 use near_contract_standards::fungible_token::metadata::FungibleTokenMetadata;
-use near_sdk::{ext_contract, json_types::U128, AccountId, Balance};
+use near_sdk::{ext_contract, json_types::U128, AccountId};
 
 pub const TGAS: u64 = 1_000_000_000_000;
 
@@ -8,7 +8,7 @@ pub const TGAS: u64 = 1_000_000_000_000;
 // Define an interface for callbacks
 #[ext_contract(ext_self)]
 pub trait SelfContract {
-	fn on_get_metadata(
+	fn on_ft_metadata(
 		&mut self,
 		contract_id: AccountId,
 		#[callback] metadata: FungibleTokenMetadata,
@@ -19,8 +19,6 @@ pub trait SelfContract {
 // FT Contract interface
 #[ext_contract(ext_ft)]
 pub trait FtContract {
-	fn create_wallet(&mut self, sender_id: AccountId, amount: Balance);
-	fn get_metadata(&self) -> FungibleTokenMetadata;
+	fn ft_metadata(&self) -> FungibleTokenMetadata;
 	fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
-	fn transfer_from(&mut self, sender_id: AccountId, receiver_id: AccountId, amount: Balance);
 }

@@ -1,8 +1,11 @@
 use std::cmp::max;
 
-use near_contract_standards::fungible_token::{
-	core::FungibleTokenCore, metadata::FungibleTokenMetadata, receiver::FungibleTokenReceiver,
-	FungibleToken,
+use near_contract_standards::{
+	fungible_token::{
+		core::FungibleTokenCore, metadata::FungibleTokenMetadata, receiver::FungibleTokenReceiver,
+		FungibleToken,
+	},
+	storage_management::{StorageBalance, StorageBalanceBounds, StorageManagement},
 };
 use near_sdk::{
 	assert_self,
@@ -10,7 +13,9 @@ use near_sdk::{
 	collections::LookupMap,
 	env,
 	json_types::U128,
-	log, near_bindgen, AccountId, Gas, PanicOnDefault, PromiseOrValue, PromiseResult,
+	log, near_bindgen,
+	serde::{Deserialize, Serialize},
+	AccountId, Gas, PanicOnDefault, PromiseOrValue, PromiseResult,
 };
 
 mod external;
@@ -23,7 +28,7 @@ pub use crate::utils::*;
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Contract {
 	// Contract Owner
-	owner_id: AccountId,
+	pub owner_id: AccountId,
 
 	// Token A and Token B token_contract:token_interface
 	pub tokens: LookupMap<AccountId, FungibleToken>,
@@ -33,14 +38,38 @@ pub struct Contract {
 
 	// Liquidity Provider(LP) Token
 	pub token_lp: FungibleToken,
+
+	// Token A contract ID
+	pub token_a_contract: AccountId,
+
+	// Token B contract ID
+	pub token_b_contract: AccountId,
+
+	// Token ratio in the pool (token_a,token_b)
+	pub token_ratio: (U128, U128),
+}
+
+#[near_bindgen]
+#[derive(Serialize, Deserialize, BorshDeserialize, BorshSerialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ContractInfo {
+	pub owner_id: AccountId,
+	pub token_a_contract: AccountId,
+	pub token_b_contract: AccountId,
+	pub token_a_meta: FungibleTokenMetadata,
+	pub token_b_meta: FungibleTokenMetadata,
+	pub token_ratio: (U128, U128),
 }
 
 #[near_bindgen]
 impl Contract {
 	#[init]
-	pub fn new(token_a_contract: AccountId, token_b_contract: AccountId) -> Self {
+	pub fn new(
+		owner_id: AccountId,
+		token_a_contract: AccountId,
+		token_b_contract: AccountId,
+	) -> Self {
 		assert!(!env::state_exists(), "Pool already initialized");
-		let owner_id = env::current_account_id();
 		let token_a = init_token(&owner_id, b"a".to_vec());
 		let token_b = init_token(&owner_id, b"b".to_vec());
 		let token_lp = init_token(&owner_id, b"lp".to_vec());
@@ -48,22 +77,31 @@ impl Contract {
 		tokens.insert(&token_a_contract, &token_a);
 		tokens.insert(&token_b_contract, &token_b);
 		let token_metadatas = LookupMap::new(b"tokdat".to_vec());
+		let self_contract_id = env::current_account_id();
 
 		ext_ft::ext(token_a_contract.clone()) // External Contract Token instance
-			.get_metadata() // External Metadata Promise
+			.ft_metadata() // External Metadata Promise
 			.then(
-				ext_self::ext(owner_id.clone()) // External Contract Self
-					.on_get_metadata(token_a_contract.clone()),
+				ext_self::ext(self_contract_id.clone()) // External Contract Self
+					.on_ft_metadata(token_a_contract.clone()),
 			);
 
 		ext_ft::ext(token_b_contract.clone()) // External Contract Token instance
-			.get_metadata() // External Metadata Promise
+			.ft_metadata() // External Metadata Promise
 			.then(
-				ext_self::ext(owner_id.clone()) // External Contract Self
-					.on_get_metadata(token_b_contract.clone()),
+				ext_self::ext(self_contract_id) // External Contract Self
+					.on_ft_metadata(token_b_contract.clone()),
 			);
 
-		Self { owner_id, tokens, token_metadatas, token_lp }
+		Self {
+			owner_id,
+			tokens,
+			token_metadatas,
+			token_lp,
+			token_a_contract,
+			token_b_contract,
+			token_ratio: (U128(1), U128(1)),
+		}
 	}
 
 	pub fn swap(
@@ -110,6 +148,19 @@ impl Contract {
 		self.tokens.insert(&buy_token_id, &buy_token);
 		self.tokens.insert(&sell_token_id, &sell_token);
 
+		// update ratio
+		let token_a_amount = self
+			.tokens
+			.get(&self.token_a_contract)
+			.unwrap()
+			.internal_unwrap_balance_of(&pool_owner_id);
+		let token_b_amount = self
+			.tokens
+			.get(&self.token_b_contract)
+			.unwrap()
+			.internal_unwrap_balance_of(&pool_owner_id);
+		self.token_ratio = (U128(token_a_amount), U128(token_b_amount));
+
 		// Return both amount
 		U128::from(buy_amount)
 	}
@@ -123,7 +174,7 @@ impl Contract {
 		token_b_name: AccountId,
 		token_b_amount: U128,
 	) {
-		assert!(self.owner_id == env::current_account_id());
+		assert!(self.owner_id == env::predecessor_account_id());
 		if token_a_name.eq(&token_b_name) {
 			panic!("Tokens can't be equal")
 		}
@@ -162,13 +213,25 @@ impl Contract {
 		} else {
 			panic!("incorrect proportions for replenishing the liquidity pool")
 		}
+		// update ratio
+		let token_a_amount = self
+			.tokens
+			.get(&self.token_a_contract)
+			.unwrap()
+			.internal_unwrap_balance_of(&pool_owner_id);
+		let token_b_amount = self
+			.tokens
+			.get(&self.token_b_contract)
+			.unwrap()
+			.internal_unwrap_balance_of(&pool_owner_id);
+		self.token_ratio = (U128(token_a_amount), U128(token_b_amount));
 	}
 
 	// Here we are excluding all tokens of signed account from
 	// liquidity pool and return those tokens back to predecessor_account_id
 	// in the right proportion
 	pub fn exclude_tokens_from_pool(&mut self, token_a_name: AccountId, token_b_name: AccountId) {
-		assert!(self.owner_id == env::current_account_id());
+		assert!(self.owner_id == env::predecessor_account_id());
 		if token_a_name.eq(&token_b_name) {
 			panic!("Tokens can't be equals")
 		}
@@ -197,6 +260,18 @@ impl Contract {
 		// Update tokens data in lookup map
 		self.tokens.insert(&token_a_name, &token_a);
 		self.tokens.insert(&token_b_name, &token_b);
+		// update ratio
+		let token_a_amount = self
+			.tokens
+			.get(&self.token_a_contract)
+			.unwrap()
+			.internal_unwrap_balance_of(&pool_owner_id);
+		let token_b_amount = self
+			.tokens
+			.get(&self.token_b_contract)
+			.unwrap()
+			.internal_unwrap_balance_of(&pool_owner_id);
+		self.token_ratio = (U128(token_a_amount), U128(token_b_amount));
 	}
 
 	#[payable]
@@ -236,13 +311,13 @@ impl Contract {
 	}
 
 	#[private]
-	pub fn on_get_metadata(
+	pub fn on_ft_metadata(
 		&mut self,
 		contract_id: AccountId,
 		#[callback] metadata: FungibleTokenMetadata,
 	) {
 		assert_self();
-		log!("on_get_metadata: contract_id: {}", contract_id);
+		log!("on_ft_metadata: contract_id: {}", contract_id);
 
 		if !self.tokens.contains_key(&contract_id) {
 			panic!("Token not supported");
@@ -259,6 +334,89 @@ impl Contract {
 				.get(&token_name)
 				.expect("Token not supported")
 				.ft_balance_of(account_id)
+		}
+	}
+
+	pub fn contract_info(&self) -> ContractInfo {
+		ContractInfo {
+			owner_id: self.owner_id.clone(),
+			token_a_contract: self.token_a_contract.clone(),
+			token_b_contract: self.token_b_contract.clone(),
+			token_a_meta: self.token_metadatas.get(&self.token_a_contract).unwrap(),
+			token_b_meta: self.token_metadatas.get(&self.token_b_contract).unwrap(),
+			token_ratio: self.token_ratio,
+		}
+	}
+
+	#[payable]
+	#[allow(dead_code)]
+	pub fn storage_deposit(
+		&mut self,
+		token_name: AccountId,
+		account_id: AccountId,
+		registration_only: Option<bool>,
+	) {
+		if token_name == env::current_account_id() {
+			self.token_lp.storage_deposit(Some(account_id), registration_only);
+		} else {
+			let mut token = self.tokens.get(&token_name).unwrap();
+			token.storage_deposit(Some(account_id), registration_only);
+			// self.tokens.insert(&token_name, &token);
+		}
+	}
+
+	#[payable]
+	#[allow(dead_code)]
+	#[allow(clippy::let_and_return)]
+	fn storage_withdraw(&mut self, token_name: AccountId, amount: Option<U128>) -> StorageBalance {
+		if token_name == env::current_account_id() {
+			self.token_lp.storage_withdraw(amount)
+		} else {
+			let mut token = self.tokens.get(&token_name).unwrap();
+			let storage_balance = token.storage_withdraw(amount);
+			// self.tokens.insert(&token_name, &token);
+			storage_balance
+		}
+	}
+
+	#[payable]
+	#[allow(dead_code)]
+	fn storage_unregister(&mut self, token_name: AccountId, force: Option<bool>) -> bool {
+		if token_name == env::current_account_id() {
+			if let Some((_, _)) = self.token_lp.internal_storage_unregister(force) {
+				return true
+			}
+		} else {
+			let mut token = self.tokens.get(&token_name).unwrap();
+			if let Some((_, _)) = token.internal_storage_unregister(force) {
+				// self.tokens.insert(&token_name, &token);
+				return true
+			}
+		}
+		false
+	}
+
+	#[allow(dead_code)]
+	fn storage_balance_bounds(&self, token_name: AccountId) -> StorageBalanceBounds {
+		if token_name == env::current_account_id() {
+			self.token_lp.storage_balance_bounds()
+		} else {
+			let token = self.tokens.get(&token_name).unwrap();
+			token.storage_balance_bounds()
+		}
+	}
+
+	#[allow(dead_code)]
+	fn storage_balance_of(
+		&self,
+		token_name: AccountId,
+		account_id: AccountId,
+	) -> Option<StorageBalance> {
+		if token_name == env::current_account_id() {
+			self.token_lp.storage_balance_of(account_id)
+		} else {
+			let token = self.tokens.get(&token_name).unwrap();
+			token.storage_balance_of(account_id)
 		}
 	}
 }

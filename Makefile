@@ -21,6 +21,18 @@ deploy_fta:
 deploy_ftb:
 	./scripts/deploy_ftb.sh
 
+.PHONY: deploy_all # Deploy all contracts
+deploy_all:
+	./scripts/deploy_all.sh
+
+.PHONY: e2e # Deploy e2e contracts
+e2e:
+	./scripts/e2e.sh
+
+.PHONY: delete_all # Delete all accounts
+delete_all:
+	./scripts/delete_all.sh
+
 .PHONY: test # Run unit tests
 test:
 	cargo test -- --nocapture

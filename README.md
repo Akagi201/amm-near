@@ -19,6 +19,7 @@ make build
 ## Deploy
 
 ```sh
+brew install direnv
 direnv allow # enable .env vars, modify .envrc to your requirements
 make accounts
 make deploy_fta
@@ -32,6 +33,16 @@ Contract unit test
 
 ```sh
 make test
+```
+
+E2E test
+
+```sh
+# 1. make build
+# 2. make accounts
+# 3. make deploy_all
+# 4. make e2e
+make e2e
 ```
 
 ## Docs
